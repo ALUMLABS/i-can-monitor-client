@@ -31,7 +31,7 @@ kubectl -n validator rollout restart deploy/validator-app
 
 1. **Download the CronJob manifest** 
    ```bash
-   curl -O https://github.com/ALUMLABS/canton-monitor-client/raw/refs/heads/main/cantonmonitor-cronjob.yaml
+   curl -O https://github.com/ALUMLABS/canton-monitor-client/raw/refs/heads/main/kubernetes/cantonmonitor-cronjob.yaml
    ```
 
 2. **Edit the file if needed**
