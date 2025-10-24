@@ -1,0 +1,131 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cantonmonitor-agent
+  namespace: validator
+spec:
+  schedule: "* * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+          containers:
+            - name: agent
+              image: alpine:3.20
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: KEY_ID
+                  valueFrom: { secretKeyRef: { name: cantonmonitor-secrets, key: CM_VALIDATOR_ID } }
+                - name: SECRET
+                  valueFrom: { secretKeyRef: { name: cantonmonitor-secrets, key: CM_SECRET } }
+                - name: BACKEND_BASE
+                  value: "https://api.cantonmonitor.com"
+                - name: VERSION_URI
+                  value: "http://validator-app:5003/api/validator/version"
+                - name: TIMEOUT
+                  value: "6"
+                - name: INSECURE
+                  value: "0"
+                - name: POST_PATH
+                  value: "/health"
+              resources:
+                requests: { cpu: "10m", memory: "32Mi" }
+                limits:   { cpu: "100m", memory: "128Mi" }
+              command: ["/bin/sh","-c"]
+              args:
+                - |
+                  set -euo pipefail
+                  apk add --no-cache curl jq coreutils procps bash >/dev/null
+
+                  trim() { awk '{$1=$1}1'; }
+                  pick_version() {
+                    local s="${1:-}"
+                    [ -n "$s" ] || { echo ""; return; }
+                    awk '{
+                      match($0, /[0-9]+(\.[0-9]+){1,3}/, m);
+                      if (m[0]!="") { print m[0]; exit }
+                    }' <<<"$s"
+                  }
+
+                  TS="$(date +%s)"
+                  canton_up=false
+                  version_value=""
+
+                  # ---- Version via API (only) ----
+                  http_out="$(curl -fsS ${INSECURE:+-k} --max-time "${TIMEOUT:-6}" "$VERSION_URI" 2>/dev/null || true)"
+                  if [ -n "$http_out" ]; then
+                    ver_from_json="$(jq -er '.version // empty' <<<"$http_out" 2>/dev/null || true)"
+                    if [ -n "$ver_from_json" ]; then
+                      version_value="$(pick_version "$ver_from_json")"
+                      [ -n "$version_value" ] && canton_up=true
+                    fi
+                  fi
+                  [ -n "$version_value" ] || version_value="0.0.00"
+                  version_json="$(jq -Rn --arg v "$version_value" '$v')"
+
+                  # ---- System status (pod scope) ----
+                  if [ -r /proc/loadavg ]; then
+                    read -r l1 l5 l15 _ < /proc/loadavg || true
+                    load_json="$(jq -n --arg l1 "$l1" --arg l5 "$l5" --arg l15 "$l15" \
+                      '{one:($l1|tonumber), five:($l5|tonumber), fifteen:($l15|tonumber)}')"
+                  else load_json=null; fi
+
+                  if [ -r /proc/meminfo ]; then
+                    mt=$(awk '/MemTotal:/ {print $2}' /proc/meminfo)
+                    ma=$(awk '/MemAvailable:/ {print $2}' /proc/meminfo)
+                    if [ -n "${mt:-}" ] && [ -n "${ma:-}" ]; then
+                      used=$((mt-ma))
+                      pct=$(awk -v t="$mt" -v u="$used" 'BEGIN{printf "%.1f",(u*100)/t}')
+                      mem_json="$(jq -n --arg mt "$mt" --arg used "$used" --arg pct "$pct" \
+                        '{total_mb:(($mt|tonumber)/1024|floor), used_mb:(($used|tonumber)/1024|floor), percent:($pct|tonumber)}')"
+                    else mem_json=null; fi
+                  else mem_json=null; fi
+
+                  disk_json="null"
+                  if read -r _ total used _ < <(df -kP / | awk 'NR==2{print $6" "$2" "$3" "$5}'); then
+                    if [ -n "${total:-}" ] && [ -n "${used:-}" ]; then
+                      tg=$(awk -v k="$total" 'BEGIN{printf "%.2f", k/1024/1024}')
+                      ug=$(awk -v k="$used"  'BEGIN{printf "%.2f", k/1024/1024}')
+                      pct=$(awk -v t="$total" -v u="$used" 'BEGIN{printf "%.1f",(u*100)/t}')
+                      disk_json="$(jq -n --arg tg "$tg" --arg ug "$ug" --arg pct "$pct" \
+                        '{"/":{total_gb:($tg|tonumber), used_gb:($ug|tonumber), percent:($pct|tonumber)}}')"
+                    fi
+                  fi
+
+                  uptime_json="null"
+                  [ -r /proc/uptime ] && uptime_json="$(awk '{print int($1)}' /proc/uptime)"
+
+                  status_json="$(jq -n --argjson load "$load_json" \
+                                      --argjson mem  "$mem_json" \
+                                      --argjson disk "$disk_json" \
+                                      --argjson up   "$uptime_json" \
+                    '{system:{load_avg:$load,mem:$mem,disk:$disk,uptime_s:$up}}')"
+
+                  payload="$(jq -n \
+                    --arg ts "$TS" \
+                    --argjson version "$version_json" \
+                    --argjson status "$status_json" \
+                    --argjson canton_up "$canton_up" \
+                    '{ts:($ts|tonumber), version:$version, status:$status, canton_up:$canton_up}')"
+
+                  ENDPOINT="${BACKEND_BASE%/}${POST_PATH:-/health}"
+                  headers=(-H 'Content-Type: application/json'
+                           -H "X-Key-Id: ${KEY_ID}"
+                           -H "X-Signature: ${SECRET}"
+                           -H "X-Timestamp: ${TS}")
+                  curl_flags=(-sS --max-time "${TIMEOUT:-6}" -H "User-Agent: cantonmonitor/1.0")
+                  [ "${INSECURE:-0}" = "1" ] && curl_flags+=(-k)
+
+                  # send once and exit
+                  tmp="$(mktemp)"
+                  curl "${curl_flags[@]}" -w '%{http_code}' -o "$tmp" \
+                       -X POST "${headers[@]}" -d "$payload" "$ENDPOINT" || true
+                  rm -f "$tmp"
