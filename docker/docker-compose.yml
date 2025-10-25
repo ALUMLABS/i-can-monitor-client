@@ -1,0 +1,24 @@
+services:
+  cantonmonitor-agent:
+    image: ghcr.io/crypt0jan/cantonmonitor-agent:latest
+    user: "10001:10001"
+    restart: always
+    environment:
+      KEY_ID: ${CM_VALIDATOR_ID}
+      SECRET: ${CM_SECRET}
+      BACKEND_BASE: ${BACKEND_BASE:-https://api.cantonmonitor.com}
+      VERSION_URI: ${VERSION_URI:-http://validator-app:5003/api/validator/version}
+      TIMEOUT: ${TIMEOUT:-6}
+      INSECURE: ${INSECURE:-0}
+      POST_PATH: ${POST_PATH:-/health}
+    entrypoint: ["/bin/sh","-c"]
+    command: ["while :; do /app/cantonmonitor.sh; sleep 60; done"]
+    mem_limit: 128m
+    mem_reservation: 32m
+    cpus: "0.10"
+    networks:
+      - ${DOCKER_NETWORK:-splice-validator_splice_validator}
+
+networks:
+  splice-validator_splice_validator:
+    external: true
