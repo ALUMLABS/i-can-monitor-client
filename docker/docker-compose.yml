@@ -7,7 +7,7 @@ services:
       KEY_ID: ${CM_VALIDATOR_ID}
       SECRET: ${CM_SECRET}
       BACKEND_BASE: ${BACKEND_BASE:-https://api.cantonmonitor.com}
-      VERSION_URI: ${VERSION_URI:-http://validator-app:5003/api/validator/version}
+      VERSION_URI: ${VERSION_URI:-http://validator:5003/api/validator/version}
       TIMEOUT: ${TIMEOUT:-6}
       INSECURE: ${INSECURE:-0}
       POST_PATH: ${POST_PATH:-/health}
