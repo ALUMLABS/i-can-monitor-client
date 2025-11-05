@@ -1,13 +1,13 @@
-# Canton Monitor Client
-Send metrics to the Canton Monitor API
+# iCanMonitor Client
+Send metrics to the iCanMonitor API
 
-Website & Sign Up: https://cantonmonitor.com
+Website & Sign Up: https://icanmonitor.com
 
 
 #### DOCKER
 
-Documentation: https://github.com/ALUMLABS/canton-monitor-client/tree/main/docker
+Documentation: https://github.com/ALUMLABS/i-can-monitor-client/tree/main/docker
 
 #### KUBERNETES
 
-Documentation: https://github.com/ALUMLABS/canton-monitor-client/tree/main/kubernetes
+Documentation: https://github.com/ALUMLABS/i-can-monitor-client/tree/main/kubernetes
